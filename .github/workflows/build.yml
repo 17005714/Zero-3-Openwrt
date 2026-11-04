@@ -89,6 +89,9 @@ jobs:
           mkdir -p openwrt/files
           cp -a files/. openwrt/files/
           chmod 0755 openwrt/files/etc/uci-defaults/99-zero3-network
+          chmod 0755 openwrt/files/etc/init.d/zero3-ap
+          chmod 0755 openwrt/files/etc/init.d/zero3-link-diagnostic
+          chmod 0755 openwrt/files/usr/libexec/zero3-ap-start
           sed -i "s|__INITIAL_WIFI_PSK__|$INITIAL_WIFI_PSK|g" openwrt/files/etc/uci-defaults/99-zero3-network
           ! grep -q '__INITIAL_WIFI_PSK__' openwrt/files/etc/uci-defaults/99-zero3-network
 
@@ -119,6 +122,7 @@ jobs:
           require kmod-uwe5622
           require uwe5622-firmware
           require wpad-openssl
+          require iw-full
           require dnsmasq-full
           require ip-full
           require luci-theme-argon

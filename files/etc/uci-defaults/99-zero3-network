@@ -4,8 +4,6 @@
 # It runs once on the target's first boot and is removed by uci-defaults.
 set -eu
 
-[ -s /etc/config/wireless ] || wifi config
-
 uci -q set network.lan.proto='static'
 uci -q set network.lan.ipaddr='192.168.50.1'
 uci -q set network.lan.netmask='255.255.255.0'
@@ -15,20 +13,35 @@ uci -q set dhcp.lan.limit='150'
 uci -q set dhcp.lan.leasetime='12h'
 uci -q delete dhcp.lan.ignore
 
-uci -q set wireless.@wifi-device[0].country='CN'
-uci -q set wireless.@wifi-device[0].channel='1'
-uci -q set wireless.@wifi-device[0].htmode='HT20'
-uci -q set wireless.@wifi-device[0].disabled='0'
-uci -q set wireless.@wifi-iface[0].device='radio0'
-uci -q set wireless.@wifi-iface[0].network='lan'
-uci -q set wireless.@wifi-iface[0].mode='ap'
-uci -q set wireless.@wifi-iface[0].ssid='Zero3'
-uci -q set wireless.@wifi-iface[0].encryption='psk2'
-uci -q set wireless.@wifi-iface[0].key='__INITIAL_WIFI_PSK__'
-uci -q set wireless.@wifi-iface[0].disabled='0'
-
 uci commit network
 uci commit dhcp
-uci commit wireless
 
+# UWE5622 appears after uci-defaults runs.  Do not call "wifi config" here:
+# it would create the stock ImmortalWrt SSID later and race our AP manager.
+cat > /etc/config/wireless <<'EOF'
+config wifi-device 'disabled'
+	option disabled '1'
+EOF
+
+cat > /etc/zero3-hostapd.conf <<EOF
+interface=__ZERO3_WIFI_IFACE__
+bridge=br-lan
+driver=nl80211
+country_code=CN
+ieee80211d=1
+hw_mode=g
+channel=1
+ieee80211n=1
+ht_capab=[HT20]
+ssid=Zero3
+auth_algs=1
+wpa=2
+wpa_passphrase=__INITIAL_WIFI_PSK__
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+EOF
+chmod 0600 /etc/zero3-hostapd.conf
+
+/etc/init.d/wpad disable || true
+/etc/init.d/zero3-ap enable
 exit 0

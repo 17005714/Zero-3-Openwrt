@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+
+START=25
+
+start() {
+	(
+		sleep 20
+		for interface in eth0 eth1; do
+			[ -d "/sys/class/net/$interface" ] || continue
+			ip link set dev "$interface" up || true
+			logger -t zero3-link "$(ethtool "$interface" 2>/dev/null | tr '\n' ';')"
+		done
+	) &
+}

@@ -27,6 +27,13 @@ Before dispatching either workflow profile, add an Actions repository secret nam
 - Wi-Fi SSID: `Zero3`
 - Wi-Fi: WPA2-PSK, country `CN`, channel `1`, HT20, bridged to LAN
 
+The `network-test` profile deliberately starts the onboard UWE5622 with a
+standalone `hostapd` service after its `wlan*` interface appears. It does not
+use the normal netifd Wi-Fi scripts, which can race the driver's late device
+registration and otherwise leave the stock `ImmortalWrt` open SSID active.
+The image also records initial Ethernet link state through `ethtool` in the
+system log for serial-console diagnosis.
+
 ## Validation order
 
 1. Run **Actions -> Build Zero 3 OpenWrt -> Run workflow**, select `network-test`.
