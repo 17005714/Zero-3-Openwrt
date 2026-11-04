@@ -11,7 +11,7 @@ uci -q set dhcp.lan.interface='lan'
 uci -q set dhcp.lan.start='100'
 uci -q set dhcp.lan.limit='150'
 uci -q set dhcp.lan.leasetime='12h'
-uci -q delete dhcp.lan.ignore
+uci -q delete dhcp.lan.ignore || true
 
 uci commit network
 uci commit dhcp
