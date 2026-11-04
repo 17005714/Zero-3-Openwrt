@@ -135,7 +135,9 @@ jobs:
 
       - name: Compile firmware
         working-directory: openwrt
-        run: make -j"$(nproc)" V=s
+        # Full command tracing turns an OpenWrt host build into an enormous Actions log
+        # and makes failures hard to recover from. Two jobs fit reliably on hosted runners.
+        run: make -j2
 
       - name: Prepare artifact
         id: artifact
