@@ -1,0 +1,167 @@
+name: Build Zero 3 OpenWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Firmware profile
+        required: true
+        default: network-test
+        type: choice
+        options:
+          - network-test
+          - full
+      network_test_passed:
+        description: Confirm wired and Wi-Fi network-test validation completed
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_REPOSITORY: https://github.com/immortalwrt/immortalwrt.git
+  SOURCE_COMMIT: 89f1ef18c888f841633f19f92655ee4b7f7716a4
+  KENZO_PACKAGES_COMMIT: 8b73238a7eaf0e862d1d5528c6c67e090e7b6e1a
+  KENZO_SMALL_COMMIT: 0e5a86fe10af5668ad3d333494b53be9d4d23b6b
+  EASYTIER_COMMIT: 9c51d3f8d2bfcefd039f2ff2354c6a7674293a06
+
+jobs:
+  build:
+    name: ${{ inputs.profile }} firmware
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout build definitions
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang clangd clang-format clang-tidy cmake cpio curl device-tree-compiler \
+            ecj fastjar file flex g++ gawk gcc-multilib gettext genisoimage git gperf haveged \
+            help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev \
+            libssl-dev libtool lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf \
+            python3 python3-pip python3-ply python3-docutils qemu-utils rsync scons squashfs-tools \
+            subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xsltproc xz-utils zlib1g-dev
+
+      - name: Check host compiler
+        run: |
+          clang++ --version
+          printf 'int main() { return 0; }\n' > /tmp/cxx23-check.cc
+          clang++ -std=c++23 /tmp/cxx23-check.cc -o /tmp/cxx23-check
+
+      - name: Clone fixed ImmortalWrt source
+        run: |
+          git clone --filter=blob:none "$SOURCE_REPOSITORY" openwrt
+          git -C openwrt checkout --detach "$SOURCE_COMMIT"
+          test "$(git -C openwrt rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+      - name: Select profile
+        env:
+          PROFILE: ${{ inputs.profile }}
+          NETWORK_TEST_PASSED: ${{ inputs.network_test_passed }}
+          INITIAL_WIFI_PSK: ${{ secrets.INITIAL_WIFI_PSK }}
+        run: |
+          test -n "$INITIAL_WIFI_PSK"
+          if [ "$PROFILE" = full ] && [ "$NETWORK_TEST_PASSED" != true ]; then
+            echo 'Refusing the full build: validate network-test first, then set network_test_passed to true.' >&2
+            exit 1
+          fi
+          cp "feeds/$PROFILE.conf" openwrt/feeds.conf.default
+          cp "configs/$PROFILE.config" openwrt/.config
+          mkdir -p openwrt/files
+          cp -a files/. openwrt/files/
+          chmod 0755 openwrt/files/etc/uci-defaults/99-zero3-network
+          sed -i "s|__INITIAL_WIFI_PSK__|$INITIAL_WIFI_PSK|g" openwrt/files/etc/uci-defaults/99-zero3-network
+          ! grep -q '__INITIAL_WIFI_PSK__' openwrt/files/etc/uci-defaults/99-zero3-network
+
+      - name: Update and lock feeds
+        env:
+          PROFILE: ${{ inputs.profile }}
+        working-directory: openwrt
+        run: |
+          ./scripts/feeds update -a
+          if [ "$PROFILE" = full ]; then
+            git -C feeds/kenzo checkout --detach "$KENZO_PACKAGES_COMMIT"
+            git -C feeds/small checkout --detach "$KENZO_SMALL_COMMIT"
+            git -C feeds/easytier checkout --detach "$EASYTIER_COMMIT"
+          fi
+          ./scripts/feeds install -a
+
+      - name: Generate final configuration
+        working-directory: openwrt
+        run: make defconfig
+
+      - name: Verify requested packages
+        env:
+          PROFILE: ${{ inputs.profile }}
+        working-directory: openwrt
+        run: |
+          require() { grep -qx "CONFIG_PACKAGE_$1=y" .config; }
+          reject() { ! grep -q "^CONFIG_PACKAGE_$1=y" .config; }
+          require kmod-uwe5622
+          require uwe5622-firmware
+          require wpad-openssl
+          require dnsmasq-full
+          require ip-full
+          require luci-theme-argon
+          grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
+          reject wpad-basic-mbedtls
+          reject luci-app-store
+          reject luci-app-quickstart
+          reject luci-app-openclash
+          reject luci-app-docker
+          reject docker
+          reject dockerd
+          reject aria2
+          reject luci-app-aria2
+          reject luci-app-zerotier
+          if [ "$PROFILE" = network-test ]; then
+            require ethtool
+          else
+            for package in luci-app-mwan3 luci-app-ttyd luci-app-filemanager luci-app-diskman luci-app-easytier luci-app-passwall luci-app-passwall2 chinadns-ng coreutils-base64 coreutils-nohup; do
+              require "$package"
+            done
+          fi
+
+      - name: Download package sources
+        working-directory: openwrt
+        run: make download -j"$(nproc)"
+
+      - name: Compile firmware
+        working-directory: openwrt
+        run: make -j"$(nproc)" V=s
+
+      - name: Prepare artifact
+        id: artifact
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          stamp="$(date -u +%Y%m%d-%H%M%S)"
+          artifact_name="zero3-${PROFILE}-${stamp}"
+          mkdir -p artifact
+          cp -a openwrt/bin/targets/sunxi/cortexa53/. artifact/
+          echo "name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "tag=zero3-${PROFILE}-${stamp}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create private release for full profile
+        if: ${{ inputs.profile == 'full' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.artifact.outputs.tag }}
+          name: Zero 3 full firmware ${{ steps.artifact.outputs.tag }}
+          generate_release_notes: true
+          files: artifact/*
