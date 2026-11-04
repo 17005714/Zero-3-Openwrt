@@ -36,6 +36,18 @@ jobs:
       - name: Checkout build definitions
         uses: actions/checkout@v4
 
+      - name: Reclaim hosted runner disk
+        run: |
+          # These are preinstalled SDKs on the disposable GitHub-hosted VM.
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo docker image prune --all --force
+          available_kb="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print $4 }')"
+          echo "Available workspace storage: $((available_kb / 1024 / 1024)) GiB"
+          test "$available_kb" -ge 26214400
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -135,9 +147,8 @@ jobs:
 
       - name: Compile firmware
         working-directory: openwrt
-        # Full command tracing turns an OpenWrt host build into an enormous Actions log
-        # and makes failures hard to recover from. Two jobs fit reliably on hosted runners.
-        run: make -j2
+        # Private GitHub-hosted runners have limited memory; prioritize a stable diagnostic build.
+        run: make -j1
 
       - name: Prepare artifact
         id: artifact
