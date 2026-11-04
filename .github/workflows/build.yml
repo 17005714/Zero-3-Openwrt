@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Checkout build definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Reclaim hosted runner disk
         run: |
@@ -163,7 +163,7 @@ jobs:
           echo "tag=zero3-${PROFILE}-${stamp}" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: artifact/
@@ -172,9 +172,10 @@ jobs:
 
       - name: Create private release for full profile
         if: ${{ inputs.profile == 'full' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.artifact.outputs.tag }}
-          name: Zero 3 full firmware ${{ steps.artifact.outputs.tag }}
-          generate_release_notes: true
-          files: artifact/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.artifact.outputs.tag }}" artifact/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Zero 3 full firmware ${{ steps.artifact.outputs.tag }}" \
+            --generate-notes
