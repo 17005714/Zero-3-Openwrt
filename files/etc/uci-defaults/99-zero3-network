@@ -2,46 +2,78 @@
 
 # This file is injected by GitHub Actions after replacing __INITIAL_WIFI_PSK__.
 # It runs once on the target's first boot and is removed by uci-defaults.
-set -eu
+set -u
 
-uci -q set network.lan.proto='static'
-uci -q set network.lan.ipaddr='192.168.50.1'
-uci -q set network.lan.netmask='255.255.255.0'
-uci -q set dhcp.lan.interface='lan'
-uci -q set dhcp.lan.start='100'
-uci -q set dhcp.lan.limit='150'
-uci -q set dhcp.lan.leasetime='12h'
+# 1. Single-port Orange Pi Zero 3 defaults eth0 to wan in ImmortalWrt.
+#    Move eth0 into br-lan so wired LAN and DHCP on 192.168.50.1 stay up.
+uci -q delete network.wan || true
+uci -q delete network.wan6 || true
+
+if uci -q get network.@device[0] >/dev/null; then
+	uci -q delete network.@device[0].ports || true
+	uci add_list network.@device[0].ports='eth0'
+	uci set network.@device[0].bridge_empty='1'
+fi
+
+uci set network.lan.device='br-lan'
+uci set network.lan.proto='static'
+uci set network.lan.ipaddr='192.168.50.1'
+uci set network.lan.netmask='255.255.255.0'
+uci -q delete network.lan.ip6assign || true
+
+# 2. Ensure DHCP server is active on LAN.
+uci set dhcp.lan.interface='lan'
+uci set dhcp.lan.start='100'
+uci set dhcp.lan.limit='150'
+uci set dhcp.lan.leasetime='12h'
 uci -q delete dhcp.lan.ignore || true
 
 uci commit network
 uci commit dhcp
 
-# UWE5622 appears after uci-defaults runs.  Do not call "wifi config" here:
-# it would create the stock ImmortalWrt SSID later and race our AP manager.
-cat > /etc/config/wireless <<'EOF'
-config wifi-device 'disabled'
-	option disabled '1'
-EOF
+# 3. Wait up to 20s for onboard UWE5622 (phy0) to register over SDIO,
+#    then let native wifi-scripts generate the canonical radio0 section.
+i=0
+while [ ! -d /sys/class/ieee80211/phy0 ] && [ "$i" -lt 20 ]; do
+	sleep 1
+	i=$((i + 1))
+done
 
-cat > /etc/zero3-hostapd.conf <<EOF
-interface=__ZERO3_WIFI_IFACE__
-bridge=br-lan
-driver=nl80211
-country_code=CN
-ieee80211d=1
-hw_mode=g
-channel=1
-ieee80211n=1
-ht_capab=[HT20]
-ssid=Zero3
-auth_algs=1
-wpa=2
-wpa_passphrase=__INITIAL_WIFI_PSK__
-wpa_key_mgmt=WPA-PSK
-rsn_pairwise=CCMP
-EOF
-chmod 0600 /etc/zero3-hostapd.conf
+rm -f /etc/config/wireless
+/sbin/wifi config || true
 
-/etc/init.d/wpad disable || true
-/etc/init.d/zero3-ap enable
+if ! uci -q get wireless.radio0 >/dev/null; then
+	uci set wireless.radio0='wifi-device'
+	uci set wireless.radio0.type='mac80211'
+	if [ -e /sys/class/ieee80211/phy0/device ]; then
+		dev_path="$(readlink -f /sys/class/ieee80211/phy0/device | sed 's#^/sys/devices/##')"
+		[ -n "$dev_path" ] && uci set wireless.radio0.path="$dev_path"
+	else
+		uci set wireless.radio0.phy='phy0'
+	fi
+fi
+
+uci set wireless.radio0.band='2g'
+uci set wireless.radio0.channel='1'
+uci set wireless.radio0.htmode='HT20'
+uci set wireless.radio0.country='CN'
+uci set wireless.radio0.noscan='1'
+uci set wireless.radio0.cell_density='0'
+uci set wireless.radio0.disabled='0'
+
+if ! uci -q get wireless.default_radio0 >/dev/null; then
+	uci set wireless.default_radio0='wifi-iface'
+fi
+uci set wireless.default_radio0.device='radio0'
+uci set wireless.default_radio0.network='lan'
+uci set wireless.default_radio0.mode='ap'
+uci set wireless.default_radio0.ssid='Zero3'
+uci set wireless.default_radio0.encryption='psk2'
+uci set wireless.default_radio0.key='__INITIAL_WIFI_PSK__'
+uci set wireless.default_radio0.ieee80211w='0'
+uci set wireless.default_radio0.disabled='0'
+
+uci commit wireless
+
+/etc/init.d/wpad enable || true
 exit 0
